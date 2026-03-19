@@ -53,8 +53,8 @@ static const u8 invert = 0x1;
 
 #define OBSTACLE_W          4
 
-#define JUMP_VEL_INITIAL    (-10)
-#define GRAVITY             (1)
+#define JUMP_VEL_INITIAL    (-16.0f)
+#define GRAVITY             (0.8f)
 
 // ----------------------- Shared state -----------------------
 
@@ -70,14 +70,14 @@ static volatile int g_jump_request = 0;
 static unsigned int g_score = 0;
 
 // DINO physics state
-static int dino_y = GROUND_Y - DINO_H;
-static int dino_vel = 0;
+static int dino_y = 21.0f;
+static int dino_vel = 0.0f;
 
 // obstacle state (single obstacle keeps it simple)
 static int obs_x = OledColMax;
-static int obs_h = 2;
+static int obs_h = 1;
 static int obs_passed = 0;
-static int obs_speed = 1;
+static int obs_speed = 2;
 
 static void reset_game(void);
 static int rects_overlap(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh);
@@ -154,13 +154,13 @@ static void reset_game(void)
 
     obs_x = OledColMax + 10;
     obs_h = 3 + (rand() % 6); // obstacle height range
-    if (obs_h > 4){
-        obs_h = 4;
+    if (obs_h > 3){
+        obs_h = 2;
     }
     obs_h = obs_h/2;
-    if (obs_h > (GROUND_Y - 2)) obs_h = GROUND_Y - 2;
+    //if (obs_h > (GROUND_Y - 2)) obs_h = GROUND_Y - 2;
     obs_passed = 0;
-    obs_speed = 3;
+    obs_speed = 2;
 }
 
 static int rects_overlap(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh)
@@ -235,51 +235,49 @@ static void dino_buttonTask(void *pvParameters)
 
 static void dino_oledTask(void *pvParameters)
 {
-    // Keep text rendering stable
     OLED_SetDrawMode(&oledDevice, 0);
     OLED_SetCharUpdate(&oledDevice, 0);
 
     while (1) {
         if (!g_paused && !g_game_over) {
-            const int dino_ground_y = GROUND_Y - DINO_H;
+            // Use float for the ground calculation
+            const float dino_ground_y = (float)(GROUND_Y - DINO_H);
 
-            // Jump if requested and on ground
+            // Jump logic
             if (g_jump_request) {
-                if (dino_y >= dino_ground_y) {
-                    dino_y = dino_ground_y;
+                if (dino_y >= dino_ground_y - 0.1f) { // Check if near ground
                     dino_vel = JUMP_VEL_INITIAL;
                 }
                 g_jump_request = 0;
             }
 
-            // Physics step
-            dino_vel += GRAVITY;
+            // --- Physics Step (The "Floaty" Part) ---
+            dino_vel += GRAVITY; 
             dino_y += dino_vel;
 
+            // Ground collision
             if (dino_y >= dino_ground_y) {
                 dino_y = dino_ground_y;
-                dino_vel = 0;
+                dino_vel = 0.0f;
             }
-            if (dino_y < 0) {
-                dino_y = 0;
-                dino_vel = 0;
+            
+            // Ceiling collision
+            if (dino_y < 0.0f) {
+                dino_y = 0.0f;
+                dino_vel = 0.0f;
             }
 
             // Obstacle update
             obs_x -= obs_speed;
 
-            // Score when obstacle passes the dino
             if (!obs_passed && (obs_x + OBSTACLE_W) < DINO_X) {
                 obs_passed = 1;
                 g_score++;
-
-                // Mild difficulty scaling
                 if (g_score % 10 == 0 && obs_speed < 8) {
                     obs_speed++;
                 }
             }
 
-            // Respawn when obstacle leaves screen
             if ((obs_x + OBSTACLE_W) < 0) {
                 obs_x = OledColMax + 10;
                 obs_passed = 0;
@@ -287,9 +285,9 @@ static void dino_oledTask(void *pvParameters)
                 if (obs_h > (GROUND_Y - 2)) obs_h = GROUND_Y - 2;
             }
 
-            // Collision check
+            // Collision check (Casting float to int for the rect check)
             const int obs_y = GROUND_Y - obs_h;
-            if (rects_overlap(DINO_X, dino_y, DINO_W, DINO_H,
+            if (rects_overlap(DINO_X, (int)dino_y, DINO_W, DINO_H,
                                obs_x, obs_y, OBSTACLE_W, obs_h)) {
                 g_game_over = 1;
             }
@@ -297,22 +295,21 @@ static void dino_oledTask(void *pvParameters)
 
         update_led();
 
-        // Draw frame (even when paused / game over)
-        // Fill the *entire* OLED framebuffer using the library's fill rectangle
-        // (so there is no "unused" region).
-        OLED_SetDrawMode(&oledDevice, 0);                       // modOledSet
-        OLED_SetFillPattern(&oledDevice, OLED_GetStdPattern(1)); // all-ones fill pattern
+        // --- Rendering ---
+        OLED_SetDrawMode(&oledDevice, 0);
+        OLED_SetFillPattern(&oledDevice, OLED_GetStdPattern(1));
         OLED_ClearBuffer(&oledDevice);
         OLED_MoveTo(&oledDevice, 0, 0);
         OLED_FillRect(&oledDevice, OledColMax - 1, OledRowMax - 1);
 
-        // Draw game elements on top (using opposite pixel value to make them visible).
         OLED_SetDrawColor(&oledDevice, 0);
         draw_ground();
-        draw_dino();
-        if (!g_game_over || 1) { // still draw obstacle for "frozen" look
-            draw_obstacle();
-        }
+        
+        // Draw dino using the integer cast of our float position
+        OLED_MoveTo(&oledDevice, DINO_X, (int)dino_y);
+        OLED_RectangleTo(&oledDevice, DINO_X + DINO_W, (int)dino_y + DINO_H);
+
+        draw_obstacle();
         draw_ui();
         OLED_Update(&oledDevice);
 
