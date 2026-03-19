@@ -55,6 +55,7 @@ static const u8 invert = 0x1;
 
 #define JUMP_VEL_INITIAL    (-16.0f)
 #define GRAVITY             (0.8f)
+#define FALL_VELOCITY        12.0f  // A high positive value to pull the dino down fast
 
 // ----------------------- Shared state -----------------------
 
@@ -209,27 +210,31 @@ static void dino_keypadTask(void *pvParameters)
     }
 }
 
+static volatile int g_fall_request = 0; // Add this global variable
+
 static void dino_buttonTask(void *pvParameters)
 {
     u32 prev_val = 0;
     while (1) {
         u32 button_val = XGpio_DiscreteRead(&btnInst, BTN_CHANNEL);
 
-        // Treat BOTH transitions as "button pressed" so it works for either
-        // active-high or active-low button wiring.
-        if (button_val != prev_val) {
+        // On button press (transition from 0 to 1)
+        if (button_val != prev_val && button_val != 0) {
             if (g_game_over) {
                 reset_game();
             } else {
-                // Only allow a jump when on the ground.
-                if (dino_y >= (GROUND_Y - DINO_H)) {
+                // If on ground: Jump
+                if (dino_y >= (GROUND_Y - DINO_H - 1)) {
                     g_jump_request = 1;
+                } 
+                // If in air: Fall/Slam
+                else {
+                    g_fall_request = 1;
                 }
             }
         }
-
         prev_val = button_val;
-        vTaskDelay(pdMS_TO_TICKS(50)); // debounce
+        vTaskDelay(pdMS_TO_TICKS(30)); 
     }
 }
 
@@ -291,6 +296,26 @@ static void dino_oledTask(void *pvParameters)
                                obs_x, obs_y, OBSTACLE_W, obs_h)) {
                 g_game_over = 1;
             }
+
+            // Inside the "if (!g_paused && !g_game_over)" block in dino_oledTask:
+
+            // Handle Jump
+            if (g_jump_request) {
+                dino_vel = JUMP_VEL_INITIAL;
+                g_jump_request = 0;
+            }
+
+            // Handle Fast Fall (The New Part!)
+            if (g_fall_request) {
+                if (dino_y < (GROUND_Y - DINO_H)) { // Only slam if actually in the air
+                    dino_vel = FALL_VELOCITY; 
+                }
+                g_fall_request = 0;
+            }
+
+            // Physics Step (remains the same)
+            dino_vel += GRAVITY;
+            dino_y += dino_vel;
         }
 
         update_led();
